@@ -1,10 +1,13 @@
 #include <Wire.h>
 #include <TinyOLED.h>
 #include <Button.h>
+#include <TinyGPS++.h>
+#include <AltSoftSerial.h>
 #include "data.h"
 
 #define DEBUGMODE        1
-// OLED I2C bus address
+#define GPS_BAUD 9600
+
 #define OLED_address  0x3c
 #define BUTTON1_PIN     4
 #define KMH     0
@@ -12,26 +15,38 @@
 #define DEG     2
 #define NB_SCREENS 5
 
+AltSoftSerial ss; // TX_PIN 9 - RX_PIN 8
+TinyGPSPlus gps;
 TinyOLED tinyOLED(0x3C); // SPI Address
 
 // GND -----/ button ------ pin 4
 Button button1 = Button(BUTTON1_PIN,BUTTON_PULLUP_INTERNAL);
 boolean longPush = false;
-boolean topSec = true; // top des secondes
-boolean gpsFix = true; 
-int screen = 0, lastScreen = 0;
-char buf [4];
+boolean topSec, lastTop = true; // top des secondes
+boolean gpsFix = false; 
+int screen = 1, lastScreen = 0;
+char buf [16];
+char todayDate[10];
 boolean refresh = true; // refresh display
 static unsigned long lWaitMillis;
-int altitude, lastAltitude = 0;
-int speed, lastSpeed = 0;
-int minTime, lastMinTime = 0;
-char* labels[5] = {"ATOMIC CLOCK", "SPEED", "ALTITUDE", "LOCATION", "HEADING"};
+byte gpsHour, gpsMinute = 0;
+char* labels[5] = {"ATOMIC CLOCK", "ALTITUDE", "SPEED", "LOCATION", "COURSE"};
+unsigned long fixAge = 999999; // age of last fix in milliseconds
+byte nbSats = 0; // number of sats
+//float gpsLat, gpsLong;  
 
+/* ----- Main program ----- */
 void setup() {
-/*  if (DEBUGMODE) {
-    Serial.begin(57600);
-  }*/
+  if (DEBUGMODE) {
+    Serial.begin(115200);
+    Serial.println("GPS Recorder");
+  }
+  ss.begin(GPS_BAUD);
+  // Passage à 4800 bauds
+  //ss.println("$PUBX,41,1,0007,0003,4800,0*13"); 
+  //ss.begin(GPS_BAUD);
+  ss.flush();
+
   // Init button
   button1.releaseHandler(handleButtonReleaseEvents);
   //button1.releaseHandler(handleButtonPressEvents);
@@ -43,26 +58,37 @@ void setup() {
   displaySplash();
   delay(700);
   tinyOLED.cls();
-
-  altitude = 4807;
-  speed = 168;
-  minTime = 30;
   lWaitMillis = millis() + 1000;  // initial setup
 }
 
 void loop() {  
-  char buf [4];
-  
+ 
   button1.isPressed();
-  if (!gpsFix) screen = 0;
-  delay(10);
+
+  /* -------- GPS ----------- */
+   if (gps.location.isValid()) {
+      fixAge =  gps.location.age();
+   }
+  
+
+  // top des secondes
   if( (long)( millis() - lWaitMillis  ) >= 0) {
     lWaitMillis += 1000;
     topSec = !topSec;
-    altitude += random(-2, 3);
-    speed += random(-1, 2);
-    minTime += random(1, 3);
-    if (DEBUGMODE) Serial.println("update Data");
+    showFix(); // update fix picto
+    if (gps.satellites.isUpdated()) nbSats = gps.satellites.value();
+    if (gps.time.isValid()) {
+      gpsHour = gps.time.hour()+2; // heure d'été
+      gpsMinute = gps.time.minute();
+      if (gpsHour > 23) gpsHour-=24;
+      }
+    
+    if (gps.date.isValid()) {
+      sprintf (todayDate, "%02d/%02d/%04d",  gps.date.day(), gps.date.month(), gps.date.year());
+    }
+    //debugSerial("Nb Sats", (gps.satellites.isValid())?gps.satellites.value():-1);
+    //debugSerial("Hdop", (gps.hdop.isValid())?gps.hdop.value():-1);
+    //debugSerial("chars processed", gps.charsProcessed());
   }
 
   if (screen != lastScreen) {
@@ -72,49 +98,56 @@ void loop() {
   if (refresh) initScreen(screen);
   
   switch(screen) {
-  case 0 : // noFix
-    if (lastMinTime != minTime) {
-        tinyOLED.drawStringXY(4,3, "Waiting"); 
-        tinyOLED.drawStringXY(2,5, "for GPS data"); 
-        lastMinTime = minTime;
-    }
-    break;
     case 1 : // Clock
-    if (lastMinTime != minTime) {
+    if (lastTop != topSec || refresh) {
       showClock(topSec);
-      lastMinTime = minTime;
+      showDate();
+      lastTop = topSec;
     }
-
     break;
 
   case 2 : // Altitude
-    if (lastAltitude != altitude) {
-      showAltitude(abs(altitude));
-      lastAltitude = altitude;
+    if (gps.altitude.isUpdated()) {
+      showAltitude(abs(gps.altitude.meters()));
     }
     break;
 
   case 3 : // Speed
-    if (lastSpeed != speed) {
-      showSpeed(speed);
-      lastSpeed = speed;
+    if (gps.speed.isUpdated()) {
+      showSpeed(gps.speed.kmph());
     }    
     break;
 
   case 4 : // Location
-    showLocation();
+     if (gps.location.isUpdated()) {
+      showLocation(gps.location.lat(), gps.location.lng());
+    }
     break;
 
-  case 5 : // Heading
-    showHeading(180);
+  case 5 : // Course
+    if (gps.course.isUpdated()) {
+      if (gps.course.deg() <= 360) showCourse((int)gps.course.deg());
+    }
     break;
   }
   refresh = false;
+  smartDelay(50);
+  
+  /*while (!feedgps()) {
+    delay(20);
+  }*/
+ 
+ if (millis() > 5000 && gps.charsProcessed() < 10) {
+   if (DEBUGMODE) Serial.println(F("No GPS data received !"));
+     tinyOLED.drawStringXY(3,3, "No GPS data"); 
+     tinyOLED.drawStringXY(3,5, " received !"); 
+ }
+
 }
 
-/* -------- Gestion de l'affichage -------- */
+/* ----- Managing screen display ----- */
 void initScreen(int num) {
-  tinyOLED.drawBitmap(0, 0, pictofix[(gpsFix==true)?0:1], 8, 8);
+  showFix();
   tinyOLED.drawBitmap(2, 0, header, 72, 8);
   showBatterylevel(readVcc());
   // clear row 2 -> 8
@@ -122,43 +155,55 @@ void initScreen(int num) {
     tinyOLED.setXY(0,row);    
     for(byte col=0; col<128; col++) tinyOLED.sendData(0);
   }
-  if(num > 0) tinyOLED.drawStringXY((16-strlen(labels[num-1]))/2 ,7, labels[num-1]);
+  if(num == 1) showDate();
+  else tinyOLED.drawStringXY((16-strlen(labels[num-1]))/2 ,7, labels[num-1]);
 }
-
+void showDate(){
+  sprintf (buf, "[%02d] %s", nbSats, todayDate);
+  tinyOLED.drawStringXY(0,7, buf); 
+}
 void showSpeed(int s) {
-  sprintf (buf, "%04i", s);
+  sprintf (buf, "%4i", s);
   tinyOLED.drawBigNums(0,2, buf);
   tinyOLED.drawBitmap(12, 4, units[KMH], 32, 16);
 }
-
-void showAltitude(int a) {
-  sprintf (buf, "%04i", a);
+void showFix() {
+  tinyOLED.drawBitmap(0, 0, pictofix[(fixAge <2000)?0:1], 8, 8);
+  debugSerial("fixAge", fixAge);
+}
+void showAltitude(int alti) {
+  sprintf (buf, "%4i", alti);
   tinyOLED.drawBigNums(0,2, buf);
   tinyOLED.drawBitmap(12, 4, units[METER], 32, 16);
+  debugSerial("altitude", alti);
 }
-void showLocation() {
-  tinyOLED.drawStringXY(0,2, "45.6541358"); 
-  tinyOLED.drawStringXY(0,4, "03.2458689"); 
+void showLocation(float lat, float lng) {
+  dtostrf(lat, 8, 6, buf);
+  tinyOLED.drawStringXY(0,2, buf);
+  dtostrf(lng, 8, 6, buf);
+  tinyOLED.drawStringXY(0,4, buf);
 }
 
-void showHeading(int h) {
-  sprintf (buf, "%03i", h);
-  tinyOLED.drawBigNums(1,2, buf);
-  tinyOLED.drawBitmap(10, 4, units[DEG], 32, 16);
+void showCourse(int c) {
+  sprintf (buf, "%3i", c);
+  tinyOLED.drawBigNums(3,2, buf);
+  //tinyOLED.drawBitmap(10, 4, units[DEG], 32, 16);
+  debugSerial("course", c);
 }
 
 void showClock(boolean topSec) {
-  if (topSec == true) sprintf (buf, "%02i:%02i", 18,55);
-  else sprintf (buf, "%02i;%02i", 18,55);
+  if (topSec) sprintf (buf, "%02i:%02i", gpsHour,gpsMinute);
+  else sprintf (buf, "%02i;%02i", gpsHour, gpsMinute);
   tinyOLED.drawBigNums(0,2, buf);
+  debugSerial("gpsHour", gpsHour);
+  debugSerial("gpsMinute", gpsMinute);
 }
 
 void displaySplash(void) {
  tinyOLED.drawBitmap(0, 0, splash, 128, 64);
 }
 
-/* ---- */
-// Show battery level icon
+/* ----- Viewing battery level ----- */
 void showBatterylevel(long vcc) {
   byte level = 0;
   if (vcc > 3600) level=4; 
@@ -166,6 +211,7 @@ void showBatterylevel(long vcc) {
   else if (vcc > 3200) level=2; 
   else if (vcc > 3000) level=1; 
   tinyOLED.drawBitmap(14, 0, battery[level], 16, 8); 
+  debugSerial("Batterylevel", vcc);
 }
 // Read VCC
 long readVcc() {
@@ -181,29 +227,18 @@ long readVcc() {
   return result;
 }
 
-/* ---------- Gestion du boutons ---------- */
+/* ---------- Gestion du bouton ---------- */
 
 // Bouton relaché
 void handleButtonReleaseEvents(Button &btn) {
-  if (gpsFix) screen++;
+  screen++;
   if (screen > NB_SCREENS) screen = 1;
 }
 
 // Appui prolongé sur le bouton
 void handleButtonHoldEvents(Button &btn) {
   //if (DEBUGMODE) Serial.println("Hold");
-  /*
-  longPush = true;
-   screen = 1;
-   value = 0;
-   if (screen == 1 && ++etat > 2) {
-   etat = 0;
-   delay(500);
-   }
-   else if (screen == 2 || screen == 3) {
-   resetAltiMinMax();
-   }
-   */
+
 }
 
 void handleButtonPressEvents(Button &btn) {
@@ -211,12 +246,37 @@ void handleButtonPressEvents(Button &btn) {
 }
 
 
+/* ------------ GPS -------------- */
+
+static void smartDelay(unsigned long ms) {
+  unsigned long start = millis();
+  do {
+    while (ss.available()) {
+      char c = ss.read();
+      //Serial.write(c); 
+      gps.encode(c);
+    }
+  } while (millis() - start < ms);
+}
+
+bool feedgps()
+{
+  while (ss.available())
+  {
+    if (gps.encode(ss.read()))
+      return true;
+  }
+  return false;
+}
 
 
-
-
-
-
+void debugSerial(char *label, int value) {
+   if (DEBUGMODE) {
+     Serial.print(label);
+     Serial.print(" = ");
+     Serial.println(value); 
+     }
+}
 
 
 
