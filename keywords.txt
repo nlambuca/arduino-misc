@@ -1,0 +1,43 @@
+#######################################
+# Syntax Coloring Map for TinyOLED
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+TinyOLED	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+TinyOLED		KEYWORD2
+sendCmd			KEYWORD2
+sendData		KEYWORD2
+turnOn			KEYWORD2
+turnOff			KEYWORD2
+setPMode		KEYWORD2
+setHMode		KEYWORD2
+cls				KEYWORD2
+init			KEYWORD2
+setXY			KEYWORD2
+drawChar		KEYWORD2
+drawString		KEYWORD2
+drawStringXY	KEYWORD2
+drawBitmap		KEYWORD2
+drawBigNums		KEYWORD2
+drawBigNum		KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+COMMAND_MODE		LITERAL1
+DATA_MODE			LITERAL1
+DISPLAY_OFF			LITERAL1
+DISPLAY_ON			LITERAL1
+H_ADDRESSING		LITERAL1
+P_ADDRESSING		LITERAL1
+NORMAL_DISPLAY		LITERAL1
+INVERSE_DISPLAY		LITERAL1
+SET_BRIGHTNESS		LITERAL1
