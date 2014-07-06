@@ -3,6 +3,7 @@
 #include <Button.h>
 #include <TinyGPS++.h>
 #include <AltSoftSerial.h>
+//#include <SD.h>
 #include "data.h"
 
 #define DEBUGMODE        1
@@ -14,10 +15,12 @@
 #define METER   1
 #define DEG     2
 #define NB_SCREENS 5
+#define SD_CS 3 // chipselect sd
 
 AltSoftSerial ss; // TX_PIN 9 - RX_PIN 8
 TinyGPSPlus gps;
 TinyOLED tinyOLED(0x3C); // SPI Address
+//File dataFile; // sd log file
 
 // GND -----/ button ------ pin 4
 Button button1 = Button(BUTTON1_PIN,BUTTON_PULLUP_INTERNAL);
@@ -29,11 +32,11 @@ char buf [16];
 char todayDate[10];
 boolean refresh = true; // refresh display
 static unsigned long lWaitMillis;
-byte gpsHour, gpsMinute = 0;
 char* labels[5] = {"ATOMIC CLOCK", "ALTITUDE", "SPEED", "LOCATION", "COURSE"};
 unsigned long fixAge = 999999; // age of last fix in milliseconds
 byte nbSats = 0; // number of sats
 //float gpsLat, gpsLong;  
+boolean isRecording = false; // sd log
 
 /* ----- Main program ----- */
 void setup() {
@@ -46,7 +49,15 @@ void setup() {
   //ss.println("$PUBX,41,1,0007,0003,4800,0*13"); 
   //ss.begin(GPS_BAUD);
   ss.flush();
-
+  
+  // SD card
+  /*pinMode(SD_CS, OUTPUT);
+   if (!SD.begin(SD_CS)) {
+    debugSerial("Card failed, or not present");
+    return;
+  }
+  File dataFile = SD.open("GPS_log.txt", FILE_WRITE);
+  */
   // Init button
   button1.releaseHandler(handleButtonReleaseEvents);
   //button1.releaseHandler(handleButtonPressEvents);
@@ -55,8 +66,8 @@ void setup() {
   // Initialize I2C and OLED Display
   Wire.begin();
   tinyOLED.init();  //init OLED display
-  displaySplash();
-  delay(700);
+ // displaySplash();
+  //delay(700);
   tinyOLED.cls();
   lWaitMillis = millis() + 1000;  // initial setup
 }
@@ -66,9 +77,7 @@ void loop() {
   button1.isPressed();
 
   /* -------- GPS ----------- */
-   if (gps.location.isValid()) {
-      fixAge =  gps.location.age();
-   }
+  
   
 
   // top des secondes
@@ -76,12 +85,22 @@ void loop() {
     lWaitMillis += 1000;
     topSec = !topSec;
     showFix(); // update fix picto
+    if (gps.location.isValid()) {
+      fixAge =  gps.location.age();
+     /* if (isRecording && dataFile) {  
+          dataFile.print(millis());
+          dataFile.print("|");
+          dataFile.print(gps.location.lat());
+          dataFile.print("|");
+          dataFile.print(gps.location.lng());
+          dataFile.print("|");
+          dataFile.print(fixAge);
+          dataFile.println(); 
+     }*/
+    }
+    
     if (gps.satellites.isUpdated()) nbSats = gps.satellites.value();
-    if (gps.time.isValid()) {
-      gpsHour = gps.time.hour()+2; // heure d'été
-      gpsMinute = gps.time.minute();
-      if (gpsHour > 23) gpsHour-=24;
-      }
+    
     
     if (gps.date.isValid()) {
       sprintf (todayDate, "%02d/%02d/%04d",  gps.date.day(), gps.date.month(), gps.date.year());
@@ -99,8 +118,12 @@ void loop() {
   
   switch(screen) {
     case 1 : // Clock
-    if (lastTop != topSec || refresh) {
-      showClock(topSec);
+      if (lastTop != topSec || refresh) {
+        if (gps.time.isValid()) {
+          byte tmpHour = gps.time.hour() + 2; // heure d'été
+          if (tmpHour > 23) tmpHour-=24;
+          showClock(topSec, tmpHour , gps.time.minute());
+      }
       showDate();
       lastTop = topSec;
     }
@@ -191,16 +214,13 @@ void showCourse(int c) {
   debugSerial("course", c);
 }
 
-void showClock(boolean topSec) {
-  if (topSec) sprintf (buf, "%02i:%02i", gpsHour,gpsMinute);
-  else sprintf (buf, "%02i;%02i", gpsHour, gpsMinute);
+void showClock(boolean topSec, byte h, byte m) {
+  sprintf (buf, "%02d%s%02d", h, (topSec)?":":";", m);
   tinyOLED.drawBigNums(0,2, buf);
-  debugSerial("gpsHour", gpsHour);
-  debugSerial("gpsMinute", gpsMinute);
 }
 
 void displaySplash(void) {
- tinyOLED.drawBitmap(0, 0, splash, 128, 64);
+ //tinyOLED.drawBitmap(0, 0, splash, 128, 64);
 }
 
 /* ----- Viewing battery level ----- */
@@ -237,7 +257,21 @@ void handleButtonReleaseEvents(Button &btn) {
 
 // Appui prolongé sur le bouton
 void handleButtonHoldEvents(Button &btn) {
+ /* if (!isRecording) {
+    File dataFile = SD.open("datalog.txt", FILE_WRITE);
+    if (dataFile) {
+      isRecording = true;
+      tinyOLED.drawStringXY(0,7, "START RECORDING"); 
+      }
+  }
+  else {
+        dataFile.close();
+        isRecording = false;
+        tinyOLED.drawStringXY(0,7, "STOP RECORDING"); 
+  }
+*/
   //if (DEBUGMODE) Serial.println("Hold");
+  isRecording = !isRecording;
 
 }
 
@@ -275,6 +309,11 @@ void debugSerial(char *label, int value) {
      Serial.print(label);
      Serial.print(" = ");
      Serial.println(value); 
+     }
+}
+void debugSerial(char *msg) {
+   if (DEBUGMODE) {
+     Serial.println(msg);
      }
 }
 
