@@ -6,7 +6,8 @@
 #include <TinyOLED.h>
 
 TinyOLED tinyOLED(0x3C); // SPI Address
-char buffer [12];
+char buffer[6];
+String number = "";
 long i = 0;  
 
 void setup(){
@@ -14,7 +15,8 @@ void setup(){
 }
 
 void loop(){
-  ltoa(i++, buffer, 10);
-  tinyOLED.drawBigNums(0, 2, buffer);
+  number = String(i++, DEC);
+  number.toCharArray(buffer, 6);
+  tinyOLED.drawBigNums(15-(number.length()*3), 2, buffer);
   if (i > 99999) i = 0;
 }
